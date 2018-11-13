@@ -1,0 +1,100 @@
+---
+title: "Cognitive Systems"
+output:
+  pdf_document: 
+    df_print: kable
+---
+#### Monika Wysoczanska, 180817
+#### Boris Mattijssen
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(plyr)
+library(arules) # association rules
+library(arulesViz) 
+library(tseries)
+library(tidyr)
+library(chron)
+
+
+basket <- read.csv("BreadBasket_DMS.csv", header = TRUE)
+```
+
+
+```{r, echo=FALSE}
+summary(basket)
+
+basket$day<-weekdays(as.Date(basket$Date))
+
+# Average number of products per transaction
+average=nrow(basket)/length(unique(basket$Transaction))
+```
+
+### Distribution along time of the  number of products
+
+```{r, echo=FALSE}
+aggdata<-aggregate(basket$Transaction, list(basket$Transaction), length)
+colnames(aggdata) <- c('Transaction', 'No')
+
+uniq_trans<-basket[!duplicated(basket$Transaction),]
+data_dist<-join(uniq_trans, aggdata, by= )
+data_dist$hr<-as.POSIXct(as.character(data_dist$Time), format="%H")
+
+hits_hour = count(data_dist, vars = c("No","hr"))
+hits_hour$hr <- format(as.POSIXct(strptime(hits_hour$hr,"%Y-%m-%d %H:%M",tz="")) ,format = "%H:%M")
+
+p<-ggplot(data = hits_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
+p + ggtitle("Number of products daily")
+
+```
+
+### Distribution of most 10 frequent items
+```{r, echo=FALSE}
+
+freq_ietms<-names(tail(sort(summary(basket$Item)),11))
+freq_ietms<-freq_ietms[-6]
+freq_data <- basket[which(basket$Item %in% freq_ietms),]
+freq_data$hr <- format(as.POSIXct(strptime(freq_data$Time,"%H:%M",tz="")) ,format = "%H")
+freq_hour<-count(freq_data, vars = c("Item","hr"))
+
+p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
+p + ggtitle("10 most frequent products daily")
+
+```
+
+### Distribution of transaction/times
+
+#### Daily in general
+```{r, echo=FALSE}
+uniq_trans$hr <- format(as.POSIXct(strptime(uniq_trans$Time,"%H:%M",tz="")) ,format = "%H")
+freq_hour<-count(uniq_trans, vars = c("hr"))
+
+p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
+p + ggtitle("Transactions daily")
+
+```
+
+#### Weekdays
+```{r, echo=FALSE}
+weekend=c("Saturday", "Sunday")
+freq_hour<-count(subset(uniq_trans, !day %in% weekend), vars = c("hr"))
+p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
+p + ggtitle("Transactions weekdays")
+```
+
+#### Weekends
+```{r, echo=FALSE}
+freq_hour<-count(subset(uniq_trans, day %in% weekend), vars = c("hr"))
+p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
+p + ggtitle("Transactions weekends")
+```
+
+```{r}
+#apriori algorithm
+clean_mat<-subset(basket, !Item=="NONE")
+trans<- as(split(clean_mat[,"Item"], clean_mat[,"Transaction"]), "transactions")
+rules<-apriori(trans, parameter = list(supp = 0.01, conf = 0.7, target = "rules", minlen = 2))
+summary(rules)
+
+inspect(rules)
+```
