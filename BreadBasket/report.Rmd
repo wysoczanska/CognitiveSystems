@@ -1,8 +1,7 @@
 ---
 title: "Cognitive Systems"
 output:
-  pdf_document: 
-    df_print: kable
+  pdf_document 
 ---
 #### Monika Wysoczanska, 180817
 #### Boris Mattijssen
@@ -15,20 +14,33 @@ library(arulesViz)
 library(tseries)
 library(tidyr)
 library(chron)
+library(lubridate)
+library(kableExtra)
+library(gridExtra)
 
-
+# data loading and some cleaning
 basket <- read.csv("BreadBasket_DMS.csv", header = TRUE)
-```
-
-
-```{r, echo=FALSE}
+basket$Time <-as.POSIXct(paste(basket$Date, basket$Time), format="%Y-%m-%d %H:%M:%S")
+basket$Date<-NULL
+basket$Weekday<-wday(basket$Time)
 summary(basket)
-
-basket$day<-weekdays(as.Date(basket$Date))
-
-# Average number of products per transaction
-average=nrow(basket)/length(unique(basket$Transaction))
 ```
+##Data Exploration
+
+The Basket Bread dataset consists of 9684 transactions of 94 different products offered in the Bakery. Those purchases are discribed by 21293 unique observations, where each one of them represents a product of particular transaction. 
+Note: For 786 observations there is missing information about the kind of product it represents.
+For each transaction we are also given the exact time of its occurance.
+
+
+
+```{r, include=FALSE}
+# Average number of products per transaction
+nrow(basket)/length(unique(basket$Transaction))
+```
+The average number of products per transaction is 2.23.
+
+Now we want to investigate the distribution of purchases along the time visually.
+
 
 ### Distribution along time of the  number of products
 
@@ -38,63 +50,92 @@ colnames(aggdata) <- c('Transaction', 'No')
 
 uniq_trans<-basket[!duplicated(basket$Transaction),]
 data_dist<-join(uniq_trans, aggdata, by= )
-data_dist$hr<-as.POSIXct(as.character(data_dist$Time), format="%H")
+data_dist$hr<-hour(data_dist$Time)
 
 hits_hour = count(data_dist, vars = c("No","hr"))
-hits_hour$hr <- format(as.POSIXct(strptime(hits_hour$hr,"%Y-%m-%d %H:%M",tz="")) ,format = "%H:%M")
 
 p<-ggplot(data = hits_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
-p + ggtitle("Number of products daily")
+p + ggtitle("Number of products daily") + xlab("Time")
 
 ```
+We can observe that the increase of sales starts between 8:00 and 9:00 and reaches the peak between 11:00 and 12:00. After the rush hour the number of sold products constatly decreases and after 5 pm drops significantly.
 
 ### Distribution of most 10 frequent items
-```{r, echo=FALSE}
+In order to analyze the distribution of the 10 most frequent products we removed NONE product transactions. The 10 most frequent products are given below:
 
+```{r, echo=FALSE}
 freq_ietms<-names(tail(sort(summary(basket$Item)),11))
 freq_ietms<-freq_ietms[-6]
+kable(freq_ietms)
 freq_data <- basket[which(basket$Item %in% freq_ietms),]
-freq_data$hr <- format(as.POSIXct(strptime(freq_data$Time,"%H:%M",tz="")) ,format = "%H")
+freq_data$hr <- hour(freq_data$Time)
 freq_hour<-count(freq_data, vars = c("Item","hr"))
 
 p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
-p + ggtitle("10 most frequent products daily")
+p + ggtitle("10 most frequent products daily") +xlab("Time")
 
 ```
+We observe the peak at the same time as general sales increase. Additionally, there is a slight increase of sales between 14:00 and 15:00.
 
 ### Distribution of transaction/times
+The analysis of the distribution of number of transactions over time we divided into parts, as we believe there might be differences between workdays and weekends.
 
-#### Daily in general
+
+#### Working days
 ```{r, echo=FALSE}
-uniq_trans$hr <- format(as.POSIXct(strptime(uniq_trans$Time,"%H:%M",tz="")) ,format = "%H")
+uniq_trans$hr <- hour(uniq_trans$Time)
 freq_hour<-count(uniq_trans, vars = c("hr"))
+freq_hour<-count(subset(uniq_trans, Weekday < 6), vars = c("hr"))
+G1<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
+G1 <-G1+ ggtitle("Transactions weekdays") +xlab("Time")
 
-p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
-p + ggtitle("Transactions daily")
-
+freq_hour<-count(subset(uniq_trans, Weekday>5), vars = c("hr"))
+G2<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
+G2<-G2 + ggtitle("Transactions weekends") +xlab("Time")
+grid.arrange(G1,G2,ncol=2)
 ```
 
-#### Weekdays
-```{r, echo=FALSE}
-weekend=c("Saturday", "Sunday")
-freq_hour<-count(subset(uniq_trans, !day %in% weekend), vars = c("hr"))
-p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
-p + ggtitle("Transactions weekdays")
-```
+The distribution of transactions over time does not differ much between working days and weekends. The 'rush hour' in both cases is between 11:00 and 12:00. However, we can see that the second popular time slot for purchases during working days is the one in the afternoon, while for the weekends it's the one in the morning. 
 
-#### Weekends
-```{r, echo=FALSE}
-freq_hour<-count(subset(uniq_trans, day %in% weekend), vars = c("hr"))
-p<-ggplot(data = freq_hour) + geom_bar(aes(x = hr, y = freq), stat="identity", position = "dodge") 
-p + ggtitle("Transactions weekends")
-```
+##Finding apriori rules
 
-```{r}
+In order to find out which products are likely to be sold together the apriori algorithm was used. We aim at finding the group of items that are bought frequently, which means we focus on higher support. We believe that lower confidence leaves the area for improvement, as we can encourage customers by different marketing techniques.
+
+Firstly, we investigate the working days, but before that we remove all the NONE product rows as they do not provide any relevant information in case of apriori rules. 
+```{r, include=FALSE}
 #apriori algorithm
-clean_mat<-subset(basket, !Item=="NONE")
+##Rules working days
+clean_mat<-subset(basket, Weekday<6)
+clean_mat<-subset(clean_mat, !Item=="NONE")
 trans<- as(split(clean_mat[,"Item"], clean_mat[,"Transaction"]), "transactions")
-rules<-apriori(trans, parameter = list(supp = 0.01, conf = 0.7, target = "rules", minlen = 2))
+rules<-apriori(trans, parameter = list(supp = 0.01, conf = 0.5, minlen = 2))
 summary(rules)
 
-inspect(rules)
+rules_conf <- sort (rules, by="support", decreasing=TRUE)
 ```
+
+We discovered 12 association rules with the support above 1% and confidence above 50%. The 6 of them with the highest support are presented in the table below.
+
+```{r, echo=FALSE}
+kable(inspect(head(rules_conf)))
+```
+
+
+We conduct the analysis using the same apriori parameters for the Weekends transactions. The 6 most frequent set of products for weekends are given in the table below.
+
+```{r, include=FALSE}
+#apriori algorithm
+##Rules working days
+clean_mat<-subset(basket, Weekday>5)
+clean_mat<-subset(clean_mat, !Item=="NONE")
+trans<- as(split(clean_mat[,"Item"], clean_mat[,"Transaction"]), "transactions")
+rules<-apriori(trans, parameter = list(supp = 0.01, conf = 0.5, minlen = 2))
+rules_conf <- sort (rules, by="support", decreasing=TRUE)
+```
+
+```{r, echo=FALSE}
+kable(inspect(head(rules_conf)))
+```
+##Conclusions
+
+For both weekends and working days all of the frequent itemsets include coffee, so we see that coffee is a common addition to all transactions. As the support for all presented rules is relatively high, we can see that these products customers tend to buy together, although the confidence of the rules is just above 50%, which leaves some area for improvement.
